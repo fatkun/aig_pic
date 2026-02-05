@@ -1,0 +1,504 @@
+// Config management
+const CONFIG_KEY = 'aigpic.config_name';
+let availableConfigs = [];
+let defaultConfigName = '';
+
+let currentPage = 1;
+const pageSize = 16;
+let ws = null;
+let isGenerating = false;
+let taskTimer = null;
+let previewImages = [];
+let previewIndex = -1;
+const NOTICE_DURATION = 3000;
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', () => {
+    setupEventListeners();
+    loadImages();
+    connectWebSocket();
+    loadConfigOptions();
+});
+
+// Event Listeners
+function setupEventListeners() {
+    document.getElementById('configSelect').addEventListener('change', (event) => {
+        persistConfigSelection(event.target.value);
+    });
+
+    // Generate button
+    document.getElementById('generateBtn').addEventListener('click', generateImages);
+
+    // Preview navigation
+    document.getElementById('previewPrev').addEventListener('click', (event) => {
+        event.stopPropagation();
+        showPrevImage();
+    });
+    document.getElementById('previewNext').addEventListener('click', (event) => {
+        event.stopPropagation();
+        showNextImage();
+    });
+
+    // Pagination
+    document.getElementById('prevPage').addEventListener('click', () => changePage(-1));
+    document.getElementById('nextPage').addEventListener('click', () => changePage(1));
+
+    // Modal close buttons
+    document.querySelectorAll('.close').forEach(btn => {
+        btn.addEventListener('click', closeModals);
+    });
+
+    // Close modal when clicking outside
+    window.addEventListener('click', (e) => {
+        if (e.target.classList.contains('modal')) {
+            closeModals();
+        }
+    });
+}
+
+// Config functions
+async function loadConfigOptions() {
+    try {
+        const response = await fetch('/api/configs');
+        if (!response.ok) {
+            throw new Error('无法加载配置列表');
+        }
+
+        const data = await response.json();
+        availableConfigs = Array.isArray(data.configs) ? data.configs : [];
+        defaultConfigName = data.default || (availableConfigs[0] ? availableConfigs[0].name : '');
+
+        const storedName = getStoredConfigName();
+        const selectedName = availableConfigs.some(config => config.name === storedName)
+            ? storedName
+            : defaultConfigName;
+
+        setConfigOptions(availableConfigs, selectedName);
+    } catch (error) {
+        console.error('Failed to load configs:', error);
+        setConfigOptions([], '');
+    }
+}
+
+function setConfigOptions(configs, selectedName) {
+    const select = document.getElementById('configSelect');
+    select.innerHTML = configs.length
+        ? configs.map(config => `<option value="${config.name}">${config.name}</option>`).join('')
+        : '<option value="">无可用配置</option>';
+
+    if (selectedName) {
+        select.value = selectedName;
+        persistConfigSelection(selectedName);
+    }
+}
+
+function getStoredConfigName() {
+    return localStorage.getItem(CONFIG_KEY);
+}
+
+function getSelectedConfigName() {
+    const select = document.getElementById('configSelect');
+    if (select && select.value) {
+        return select.value;
+    }
+    return getStoredConfigName() || '';
+}
+
+function persistConfigSelection(name) {
+    if (name) {
+        localStorage.setItem(CONFIG_KEY, name);
+    }
+}
+
+function getSelectedRatio() {
+    const selected = document.querySelector('input[name="ratio"]:checked');
+    return selected ? selected.value : 'default';
+}
+
+function showNotice(message, options = {}) {
+    const container = document.getElementById('noticeContainer');
+    if (!container) {
+        return;
+    }
+
+    const notice = document.createElement('div');
+    notice.className = 'notice';
+
+    const text = document.createElement('span');
+    text.className = 'notice-text';
+    text.textContent = message;
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'notice-close';
+    closeBtn.textContent = '×';
+    closeBtn.addEventListener('click', () => removeNotice(notice));
+
+    notice.appendChild(text);
+    notice.appendChild(closeBtn);
+    container.appendChild(notice);
+
+    if (options.autoClose !== false) {
+        const duration = Number.isFinite(options.duration) ? options.duration : NOTICE_DURATION;
+        if (duration > 0) {
+            notice._timeoutId = setTimeout(() => removeNotice(notice), duration);
+        }
+    }
+}
+
+function removeNotice(notice) {
+    if (!notice) {
+        return;
+    }
+    if (notice._timeoutId) {
+        clearTimeout(notice._timeoutId);
+    }
+    notice.remove();
+}
+
+function ensureTaskTimer() {
+    if (taskTimer) {
+        return;
+    }
+    taskTimer = setInterval(updateTaskTimers, 1000);
+}
+
+function updateTaskTimers() {
+    const items = document.querySelectorAll('.task-item');
+    items.forEach(item => {
+        const status = item.dataset.status;
+        const statusEl = item.querySelector('.task-status');
+        if (!statusEl) {
+            return;
+        }
+
+        const startedAt = item.dataset.startedAt || item.dataset.createdAt;
+        const finishedAt = item.dataset.finishedAt;
+        const duration = getDurationSeconds(startedAt, status === 'running' ? null : finishedAt);
+        const durationText = duration !== null ? `${duration}秒` : '';
+
+        if (status === 'running') {
+            statusEl.textContent = durationText ? `生成中(${durationText})` : '生成中';
+        } else if (status === 'succeeded') {
+            statusEl.textContent = durationText ? `已完成(${durationText})` : '已完成';
+        } else if (status === 'failed') {
+            statusEl.textContent = durationText ? `失败(${durationText})` : '失败';
+        } else if (status === 'queued') {
+            statusEl.textContent = '排队中';
+        }
+    });
+}
+
+function getDurationSeconds(startedAt, finishedAt) {
+    if (!startedAt) {
+        return null;
+    }
+    const startTime = Date.parse(startedAt);
+    if (Number.isNaN(startTime)) {
+        return null;
+    }
+    const endTime = finishedAt ? Date.parse(finishedAt) : Date.now();
+    if (Number.isNaN(endTime)) {
+        return null;
+    }
+    return Math.max(0, Math.floor((endTime - startTime) / 1000));
+}
+
+function closeModals() {
+    document.querySelectorAll('.modal').forEach(modal => {
+        modal.style.display = 'none';
+    });
+}
+
+// WebSocket connection
+function connectWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/tasks`;
+
+    ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+        console.log('WebSocket connected');
+    };
+
+    ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.type === 'initial_tasks') {
+            renderTasks(data.tasks);
+        } else if (data.type === 'task_update') {
+            updateTask(data.task);
+        }
+    };
+
+    ws.onerror = (error) => {
+        console.error('WebSocket error:', error);
+    };
+
+    ws.onclose = () => {
+        console.log('WebSocket disconnected, reconnecting...');
+        setTimeout(connectWebSocket, 3000);
+    };
+}
+
+async function updateTask(task) {
+    // Fetch latest tasks from server
+    try {
+        const response = await fetch('/api/tasks');
+        if (response.ok) {
+            const tasks = await response.json();
+            renderTasks(tasks);
+        }
+    } catch (error) {
+        console.error('Failed to fetch tasks:', error);
+    }
+
+    // If task succeeded, refresh images
+    if (task.status === 'succeeded') {
+        loadImages();
+    }
+}
+
+// Generate images
+async function generateImages() {
+    if (isGenerating) return;
+
+    const prompt = document.getElementById('prompt').value.trim();
+    const count = parseInt(document.getElementById('count').value);
+    const configName = getSelectedConfigName();
+    const ratio = getSelectedRatio();
+
+    // Validation
+    if (!prompt) {
+        showNotice('请输入提示词');
+        return;
+    }
+
+    if (!configName) {
+        showNotice('请先选择配置');
+        const select = document.getElementById('configSelect');
+        if (select) {
+            select.focus();
+        }
+        return;
+    }
+
+    if (count < 1 || count > 10) {
+        showNotice('生成数量必须在 1-10 之间');
+        return;
+    }
+
+    // Set button to loading state
+    const btn = document.getElementById('generateBtn');
+    const originalContent = btn.innerHTML;
+    btn.innerHTML = '<span class="btn-label">Loading...</span>';
+    btn.disabled = true;
+    isGenerating = true;
+
+    const promptWithRatio = ratio === 'default' ? prompt : `${prompt} 宽高比例为${ratio}`;
+
+    try {
+        const response = await fetch('/api/tasks', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                prompt: promptWithRatio,
+                n: count,
+                config_name: configName
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || '创建任务失败');
+        }
+
+        const data = await response.json();
+        console.log(`任务已创建: ${data.task_id}`);
+
+        // Don't clear prompt - keep it for user
+
+    } catch (error) {
+        showNotice(`错误: ${error.message}`);
+    } finally {
+        // Restore button state
+        btn.innerHTML = originalContent;
+        btn.disabled = false;
+        isGenerating = false;
+    }
+}
+
+// Task management
+function renderTasks(tasks) {
+    const container = document.getElementById('tasksList');
+
+    if (!tasks || tasks.length === 0) {
+        container.innerHTML = '<p style="color: #999;">暂无任务</p>';
+        return;
+    }
+
+    // Keep only last 10 tasks, with running tasks first
+    const sortedTasks = tasks.slice(0, 10);
+
+    container.innerHTML = sortedTasks.map(task => {
+        const statusText = getTaskStatusText(task);
+
+        // Limit prompt to 10 characters
+        const displayPrompt = formatTaskPrompt(task.prompt);
+        const shortPrompt = displayPrompt.length > 10
+            ? displayPrompt.substring(0, 10) + '...'
+            : displayPrompt;
+
+        const startedAt = task.started_at || '';
+        const finishedAt = task.finished_at || '';
+        const createdAt = task.created_at || '';
+
+        return `
+            <div class="task-item ${task.status}" data-status="${task.status}" data-started-at="${startedAt}" data-finished-at="${finishedAt}" data-created-at="${createdAt}">
+                <span class="task-prompt">${shortPrompt}</span>
+                <span class="task-status">${statusText}</span>
+            </div>
+        `;
+    }).join('');
+
+    ensureTaskTimer();
+    updateTaskTimers();
+}
+
+function getTaskStatusText(task) {
+    const duration = getDurationSeconds(
+        task.started_at || task.created_at,
+        task.status === 'running' ? null : task.finished_at
+    );
+    const durationText = duration !== null ? `${duration}秒` : '';
+
+    if (task.status === 'running') {
+        return durationText ? `生成中(${durationText})` : '生成中';
+    }
+    if (task.status === 'succeeded') {
+        return durationText ? `已完成(${durationText})` : '已完成';
+    }
+    if (task.status === 'failed') {
+        return durationText ? `失败(${durationText})` : '失败';
+    }
+    if (task.status === 'queued') {
+        return '排队中';
+    }
+    return task.status || '';
+}
+
+function formatTaskPrompt(prompt) {
+    if (!prompt) {
+        return '';
+    }
+    return prompt.replace(/\s+宽高比例为(9:16|16:9|4:3|1:1)$/, '');
+}
+
+// Image management
+async function loadImages() {
+    try {
+        const response = await fetch(`/api/images?page=${currentPage}&page_size=${pageSize}`);
+        if (!response.ok) return;
+
+        const data = await response.json();
+        renderImages(data);
+    } catch (error) {
+        console.error('Failed to load images:', error);
+    }
+}
+
+function renderImages(data) {
+    const grid = document.getElementById('imagesGrid');
+    const pageInfo = document.getElementById('pageInfo');
+
+    if (data.items.length === 0) {
+        grid.innerHTML = '<p style="color: #999; grid-column: 1/-1; text-align: center;">暂无图片</p>';
+        pageInfo.textContent = '0 / 0';
+        previewImages = [];
+        previewIndex = -1;
+        return;
+    }
+
+    previewImages = data.items.map(img => img.url);
+
+    grid.innerHTML = data.items.map(img => `
+        <div class="image-item" onclick="previewImage('${img.url}')">
+            <img src="${img.url}" alt="Generated image">
+            <div class="image-actions">
+                <button class="action-btn" onclick="event.stopPropagation(); showPrompt(${img.id})" title="查看提示词">
+                    ℹ️
+                </button>
+                <button class="action-btn" onclick="event.stopPropagation(); deleteImage(${img.id})" title="删除">
+                    🗑️
+                </button>
+            </div>
+        </div>
+    `).join('');
+
+    const totalPages = Math.ceil(data.total / pageSize);
+    pageInfo.textContent = `${currentPage} / ${totalPages}`;
+
+    document.getElementById('prevPage').disabled = currentPage === 1;
+    document.getElementById('nextPage').disabled = currentPage >= totalPages;
+}
+
+function changePage(delta) {
+    currentPage += delta;
+    if (currentPage < 1) currentPage = 1;
+    loadImages();
+}
+
+function previewImage(url) {
+    document.getElementById('previewImage').src = url;
+    document.getElementById('previewModal').style.display = 'block';
+    previewIndex = previewImages.indexOf(url);
+}
+
+function showPrevImage() {
+    if (previewIndex <= 0) {
+        showNotice('已经是最后一张了');
+        return;
+    }
+    previewIndex -= 1;
+    document.getElementById('previewImage').src = previewImages[previewIndex];
+}
+
+function showNextImage() {
+    if (previewIndex === -1 || previewIndex >= previewImages.length - 1) {
+        showNotice('已经是最后一张了');
+        return;
+    }
+    previewIndex += 1;
+    document.getElementById('previewImage').src = previewImages[previewIndex];
+}
+
+async function showPrompt(imageId) {
+    try {
+        const response = await fetch(`/api/images/${imageId}/prompt`);
+        if (!response.ok) throw new Error('获取提示词失败');
+
+        const data = await response.json();
+        document.getElementById('promptText').textContent = data.prompt;
+        document.getElementById('promptModal').style.display = 'block';
+    } catch (error) {
+        showNotice(`错误: ${error.message}`);
+    }
+}
+
+async function deleteImage(imageId) {
+    if (!confirm('确定要删除这张图片吗？')) return;
+
+    try {
+        const response = await fetch(`/api/images/${imageId}`, {
+            method: 'DELETE'
+        });
+
+        if (!response.ok) throw new Error('删除失败');
+
+        loadImages();
+    } catch (error) {
+        showNotice(`错误: ${error.message}`);
+    }
+}

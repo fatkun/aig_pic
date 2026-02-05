@@ -1,0 +1,12 @@
+{
+  "max_concurrent": 2,
+  "api_configs": [
+    {
+      "name": "grok",
+      "base_url": "https://xxxxxx",
+      "api_key": "bbbbbbbbb",
+      "model": "grok-imagine-1.0",
+      "proxy": ""
+    }
+  ]
+}
