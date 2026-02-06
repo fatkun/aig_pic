@@ -233,6 +233,16 @@ function closeModals() {
 
 // Keyboard shortcuts handler
 function handleKeyboardShortcuts(e) {
+    // Ctrl+Enter to generate images
+    if (e.ctrlKey && e.key === 'Enter') {
+        e.preventDefault();
+        const generateBtn = document.getElementById('generateBtn');
+        if (generateBtn && !generateBtn.disabled) {
+            generateBtn.click();
+        }
+        return;
+    }
+
     // Check if preview modal is open
     const previewModal = document.getElementById('previewModal');
     const isPreviewOpen = previewModal && previewModal.style.display === 'block';
