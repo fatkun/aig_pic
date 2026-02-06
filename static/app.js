@@ -11,6 +11,9 @@ let taskTimer = null;
 let previewImages = [];
 let previewIndex = -1;
 const NOTICE_DURATION = 3000;
+let uploadedImageData = null;
+let previousCount = 1;
+const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -28,6 +31,11 @@ function setupEventListeners() {
 
     // Generate button
     document.getElementById('generateBtn').addEventListener('click', generateImages);
+
+    // Image upload
+    document.getElementById('attachBtn').addEventListener('click', handleAttachClick);
+    document.getElementById('imageInput').addEventListener('change', handleImageSelect);
+    document.getElementById('removeImageBtn').addEventListener('click', removeImage);
 
     // Preview navigation
     document.getElementById('previewPrev').addEventListener('click', (event) => {
@@ -288,6 +296,11 @@ async function generateImages() {
         return;
     }
 
+    // Force count to 1 if image is uploaded
+    if (uploadedImageData && count !== 1) {
+        count = 1;
+    }
+
     // Set button to loading state
     const btn = document.getElementById('generateBtn');
     const originalContent = btn.innerHTML;
@@ -306,7 +319,8 @@ async function generateImages() {
             body: JSON.stringify({
                 prompt: promptWithRatio,
                 n: count,
-                config_name: configName
+                config_name: configName,
+                image_data: uploadedImageData
             })
         });
 
@@ -354,9 +368,24 @@ function renderTasks(tasks) {
         const startedAt = task.started_at || '';
         const finishedAt = task.finished_at || '';
         const createdAt = task.created_at || '';
+        const taskId = task.task_id || '';
+        const errorMsg = task.error || '';
+
+        // Add click handler for failed tasks
+        const clickHandler = task.status === 'failed' ? `onclick="showTaskError('${taskId}')"` : '';
+        const cursorStyle = task.status === 'failed' ? 'cursor: pointer;' : '';
 
         return `
-            <div class="task-item ${task.status}" data-status="${task.status}" data-started-at="${startedAt}" data-finished-at="${finishedAt}" data-created-at="${createdAt}">
+            <div class="task-item ${task.status}"
+                 data-status="${task.status}"
+                 data-started-at="${startedAt}"
+                 data-finished-at="${finishedAt}"
+                 data-created-at="${createdAt}"
+                 data-task-id="${taskId}"
+                 data-error="${errorMsg}"
+                 ${clickHandler}
+                 style="${cursorStyle}"
+                 title="${task.status === 'failed' ? '点击查看错误详情' : ''}">
                 <span class="task-prompt">${shortPrompt}</span>
                 <span class="task-status">${statusText}</span>
             </div>
@@ -501,4 +530,114 @@ async function deleteImage(imageId) {
     } catch (error) {
         showNotice(`错误: ${error.message}`);
     }
+}
+
+// Image upload functions
+function handleAttachClick() {
+    document.getElementById('imageInput').click();
+}
+
+async function handleImageSelect(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    // Validate image
+    const validation = validateImage(file);
+    if (!validation.valid) {
+        showNotice(validation.error);
+        event.target.value = '';
+        return;
+    }
+
+    try {
+        const dataUrl = await readImageAsDataURL(file);
+        uploadedImageData = dataUrl;
+        showImageThumbnail(dataUrl);
+        updateCountInputState();
+    } catch (error) {
+        showNotice(`读取图片失败: ${error.message}`);
+        event.target.value = '';
+    }
+}
+
+function validateImage(file) {
+    // Check type
+    if (!file.type.startsWith('image/')) {
+        return { valid: false, error: '仅支持图片格式' };
+    }
+
+    // Check size
+    if (file.size > MAX_IMAGE_SIZE) {
+        return { valid: false, error: `图片大小不能超过 ${MAX_IMAGE_SIZE / 1024 / 1024}MB` };
+    }
+
+    return { valid: true };
+}
+
+function readImageAsDataURL(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target.result);
+        reader.onerror = (e) => reject(new Error('读取文件失败'));
+        reader.readAsDataURL(file);
+    });
+}
+
+function showImageThumbnail(dataUrl) {
+    const container = document.querySelector('.prompt-container');
+    const thumbnail = document.getElementById('imageThumbnail');
+    const img = document.getElementById('thumbnailImg');
+
+    container.classList.add('has-image');
+    thumbnail.style.display = 'block';
+    img.src = dataUrl;
+}
+
+function removeImage() {
+    const container = document.querySelector('.prompt-container');
+    const thumbnail = document.getElementById('imageThumbnail');
+    const input = document.getElementById('imageInput');
+
+    uploadedImageData = null;
+    container.classList.remove('has-image');
+    thumbnail.style.display = 'none';
+    input.value = '';
+
+    updateCountInputState();
+}
+
+function updateCountInputState() {
+    const countInput = document.getElementById('count');
+    const hasImage = uploadedImageData !== null;
+
+    if (hasImage) {
+        // Save current count before disabling
+        previousCount = parseInt(countInput.value) || 1;
+        countInput.value = 1;
+        countInput.disabled = true;
+    } else {
+        // Restore previous count
+        countInput.value = previousCount;
+        countInput.disabled = false;
+    }
+}
+
+// Task error display
+function showTaskError(taskId) {
+    // Find task element
+    const taskElement = document.querySelector(`[data-task-id="${taskId}"]`);
+    if (!taskElement) {
+        showNotice('任务不存在');
+        return;
+    }
+
+    const errorMsg = taskElement.dataset.error;
+    if (!errorMsg) {
+        showNotice('无错误信息');
+        return;
+    }
+
+    // Display error in modal
+    document.getElementById('taskErrorText').textContent = errorMsg;
+    document.getElementById('taskErrorModal').style.display = 'block';
 }

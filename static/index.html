@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 文生图</title>
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/styles.css?t=202602061444">
 </head>
 <body>
     <div id="noticeContainer" class="notice-container"></div>
@@ -19,8 +19,22 @@
             </div>
 
             <div class="input-section">
-                <label for="prompt">提示词</label>
-                <textarea id="prompt" rows="4" placeholder="输入图片描述..."></textarea>
+                <div class="prompt-header">
+                    <label for="prompt">提示词</label>
+                    <button type="button" id="attachBtn" class="attach-btn" title="上传参考图片">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="prompt-container">
+                    <textarea id="prompt" rows="4" placeholder="输入图片描述..."></textarea>
+                    <input type="file" id="imageInput" accept="image/*" style="display: none;">
+                    <div id="imageThumbnail" class="image-thumbnail" style="display: none;">
+                        <img id="thumbnailImg" src="" alt="参考图片">
+                        <button type="button" id="removeImageBtn" class="remove-image-btn" title="删除图片">×</button>
+                    </div>
+                </div>
 
                 <div class="ratio-section">
                     <span class="ratio-label">图片比例</span>
@@ -105,6 +119,15 @@
         </div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <!-- Task Error Modal -->
+    <div id="taskErrorModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h3>任务失败原因</h3>
+            <p id="taskErrorText" style="color: #ef4444; word-break: break-word;"></p>
+        </div>
+    </div>
+
+    <script src="/static/app.js?t=202602061444"></script>
 </body>
 </html>

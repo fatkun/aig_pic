@@ -2,15 +2,16 @@ import httpx
 import base64
 import os
 import logging
+import re
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Optional
 import uuid
 
 # Setup logging
 logger = logging.getLogger(__name__)
 
 
-async def generate_images(settings: Dict, prompt: str, n: int) -> List[str]:
+async def generate_images(settings: Dict, prompt: str, n: int, image_data: Optional[str] = None) -> List[str]:
     """
     Call external image generation API and save images
 
@@ -27,24 +28,39 @@ async def generate_images(settings: Dict, prompt: str, n: int) -> List[str]:
     model = settings["model"]
     proxy = settings.get("proxy")
 
-    # Use standard images/generations endpoint
-    url = f"{base_url}/v1/images/generations"
-
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}"
     }
 
-    # Standard image generation payload
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "n": n,
-        "stream": False,
-        "size": "1024x1024",
-        "quality": "standard",
-        "response_format": "b64_json"  # Try b64_json first
-    }
+    # Choose endpoint based on whether image_data is provided
+    if image_data:
+        # Use chat completions endpoint for img2img
+        url = f"{base_url}/v1/chat/completions"
+        payload = {
+            "model": model,
+            "temperature": 1,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": image_data}}
+                ]
+            }],
+            "stream": False  # 使用非流式响应以便解析
+        }
+    else:
+        # Use standard images/generations endpoint
+        url = f"{base_url}/v1/images/generations"
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "n": n,
+            "stream": False,
+            "size": "1024x1024",
+            "quality": "standard",
+            "response_format": "b64_json"  # Try b64_json first
+        }
 
     filenames = []
 
@@ -56,13 +72,28 @@ async def generate_images(settings: Dict, prompt: str, n: int) -> List[str]:
 
     async with httpx.AsyncClient(**client_kwargs) as client:
         try:
-            logger.info(f"Generating {n} images with prompt: {prompt[:50]}...")
+            logger.info(f"Generating {n} images with prompt: {prompt[:50]}... (img2img: {image_data is not None})")
             response = await client.post(url, json=payload, headers=headers)
             response.raise_for_status()
             data = response.json()
 
-            # Process response
-            if "data" in data and len(data["data"]) > 0:
+            # Handle img2img response (chat completions)
+            if image_data:
+                content = data["choices"][0]["message"]["content"]
+
+                # Extract all URLs (handle both plain URL and markdown format)
+                url_matches = re.findall(r'https?://[^\s\)]+', content)
+                if url_matches:
+                    # Convert to list of dicts for _save_url_images
+                    image_urls = [{"url": url} for url in url_matches]
+                    # Reuse existing _save_url_images function
+                    filenames = await _save_url_images(image_urls, prompt, client)
+                    logger.info(f"Successfully saved {len(filenames)} images (img2img)")
+                else:
+                    raise ValueError("No valid image URL in response")
+
+            # Handle standard text-to-image response
+            elif "data" in data and len(data["data"]) > 0:
                 if "b64_json" in data["data"][0]:
                     filenames = await _save_b64_images(data["data"], prompt)
                     logger.info(f"Successfully saved {len(filenames)} images (b64_json)")
@@ -75,25 +106,30 @@ async def generate_images(settings: Dict, prompt: str, n: int) -> List[str]:
                 raise ValueError("No image data in response")
 
         except (httpx.HTTPStatusError, KeyError) as e:
-            logger.warning(f"b64_json format failed, trying url format: {e}")
-            # Fallback to url format
-            payload["response_format"] = "url"
+            # Only try fallback for text-to-image (not img2img)
+            if not image_data:
+                logger.warning(f"b64_json format failed, trying url format: {e}")
+                # Fallback to url format
+                payload["response_format"] = "url"
 
-            try:
-                response = await client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
-                data = response.json()
+                try:
+                    response = await client.post(url, json=payload, headers=headers)
+                    response.raise_for_status()
+                    data = response.json()
 
-                if "data" in data and len(data["data"]) > 0:
-                    if "url" in data["data"][0]:
-                        filenames = await _save_url_images(data["data"], prompt, client)
-                        logger.info(f"Successfully saved {len(filenames)} images (url fallback)")
+                    if "data" in data and len(data["data"]) > 0:
+                        if "url" in data["data"][0]:
+                            filenames = await _save_url_images(data["data"], prompt, client)
+                            logger.info(f"Successfully saved {len(filenames)} images (url fallback)")
+                        else:
+                            raise ValueError("No valid image data in response")
                     else:
-                        raise ValueError("No valid image data in response")
-                else:
-                    raise ValueError("Empty response data")
-            except Exception as fallback_error:
-                logger.error(f"Both b64_json and url formats failed: {fallback_error}")
+                        raise ValueError("Empty response data")
+                except Exception as fallback_error:
+                    logger.error(f"Both b64_json and url formats failed: {fallback_error}")
+                    raise
+            else:
+                logger.error(f"Image generation failed (img2img): {e}")
                 raise
 
         except Exception as e:

@@ -48,6 +48,7 @@ class TaskCreate(BaseModel):
     prompt: str = Field(..., min_length=1)
     n: int = Field(..., ge=1, le=10)
     config_name: Optional[str] = None
+    image_data: Optional[str] = None
 
 
 class TaskResponse(BaseModel):
@@ -157,6 +158,10 @@ async def create_task(task_data: TaskCreate):
     if not config:
         raise HTTPException(status_code=400, detail="Config not found")
 
+    # Validate: if image_data is provided, n must be 1
+    if task_data.image_data and task_data.n != 1:
+        raise HTTPException(status_code=400, detail="生成数量必须为 1（使用参考图片时）")
+
     settings = {
         "base_url": config.get("base_url", "").rstrip("/"),
         "api_key": config.get("api_key", ""),
@@ -181,7 +186,8 @@ async def create_task(task_data: TaskCreate):
             prompt=task_data.prompt,
             n=task_data.n,
             settings=settings,
-            config_name=task_data.config_name
+            config_name=task_data.config_name,
+            image_data=task_data.image_data
         )
         queue_elapsed = time.perf_counter() - queue_start
         total_elapsed = time.perf_counter() - request_start

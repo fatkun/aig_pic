@@ -13,8 +13,8 @@ from src.db import insert_image, insert_task, update_task_status, get_task_by_id
 logger = logging.getLogger(__name__)
 
 
-def _run_generate_images(settings: Dict, prompt: str, n: int) -> List[str]:
-    return asyncio.run(generate_images(settings, prompt, n))
+def _run_generate_images(settings: Dict, prompt: str, n: int, image_data: Optional[str] = None) -> List[str]:
+    return asyncio.run(generate_images(settings, prompt, n, image_data))
 
 
 class TaskStatus(str, Enum):
@@ -26,7 +26,8 @@ class TaskStatus(str, Enum):
 
 class Task:
     def __init__(self, prompt: str, n: int, settings: Dict, task_id: Optional[str] = None,
-                 created_at: Optional[str] = None, config_name: Optional[str] = None):
+                 created_at: Optional[str] = None, config_name: Optional[str] = None,
+                 image_data: Optional[str] = None):
         self.task_id = task_id or str(uuid.uuid4())
         self.status = TaskStatus.QUEUED
         self.prompt = prompt
@@ -38,6 +39,7 @@ class Task:
         self.results: List[str] = []
         self.error: Optional[str] = None
         self.config_name = config_name
+        self.image_data = image_data
 
     def to_dict(self) -> Dict:
         return {
@@ -113,7 +115,8 @@ class TaskQueue:
                         _run_generate_images,
                         task.settings,
                         task.prompt,
-                        task.n
+                        task.n,
+                        task.image_data
                     )
 
                     # Save to database
@@ -157,10 +160,11 @@ class TaskQueue:
 
         logger.info(f"Worker {worker_id} stopped")
 
-    async def create_task(self, prompt: str, n: int, settings: Dict, config_name: Optional[str] = None) -> str:
+    async def create_task(self, prompt: str, n: int, settings: Dict, config_name: Optional[str] = None,
+                          image_data: Optional[str] = None) -> str:
         """Create a new task and add to queue"""
         start_time = time.perf_counter()
-        task = Task(prompt, n, settings, config_name=config_name)
+        task = Task(prompt, n, settings, config_name=config_name, image_data=image_data)
         self.tasks[task.task_id] = task
 
         # Save to database
