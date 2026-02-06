@@ -378,13 +378,26 @@ input::placeholder {
 .task-item {
     padding: 8px 10px;
     margin-bottom: 8px;
-    background: #111827;
+    background: #192743;
     border-radius: 6px;
     border-left: 3px solid #3b82f6;
     display: flex;
     justify-content: space-between;
     align-items: center;
     font-size: 13px;
+    gap: 8px;
+}
+
+.task-prompt {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.task-status {
+    flex-shrink: 0;
 }
 
 .task-item.running {
@@ -431,6 +444,34 @@ input::placeholder {
     object-fit: cover;
 }
 
+.delete-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(220, 38, 38, 0.9);
+    border: none;
+    color: #fff;
+    font-size: 20px;
+    line-height: 1;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.2s;
+    font-weight: bold;
+}
+
+.delete-btn:hover {
+    background: rgba(185, 28, 28, 1);
+}
+
+.image-item:hover .delete-btn {
+    display: flex;
+}
+
 .image-actions {
     position: absolute;
     bottom: 8px;
@@ -459,7 +500,7 @@ input::placeholder {
 }
 
 .action-btn:hover {
-    background: rgba(30, 41, 59, 0.95);
+    background: rgba(54, 78, 133, 0.95);
 }
 
 .pagination {

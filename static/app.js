@@ -5,6 +5,7 @@ let defaultConfigName = '';
 
 let currentPage = 1;
 const pageSize = 16;
+let totalPages = 1;
 let ws = null;
 let isGenerating = false;
 let taskTimer = null;
@@ -62,6 +63,9 @@ function setupEventListeners() {
             closeModals();
         }
     });
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', handleKeyboardShortcuts);
 }
 
 // Config functions
@@ -218,6 +222,54 @@ function closeModals() {
     });
 }
 
+// Keyboard shortcuts handler
+function handleKeyboardShortcuts(e) {
+    // Check if preview modal is open
+    const previewModal = document.getElementById('previewModal');
+    const isPreviewOpen = previewModal && previewModal.style.display === 'block';
+
+    if (isPreviewOpen) {
+        // In preview mode
+        switch(e.key) {
+            case 'ArrowLeft':
+                e.preventDefault();
+                showPrevImage();
+                break;
+            case 'ArrowRight':
+                e.preventDefault();
+                showNextImage();
+                break;
+            case 'Escape':
+                e.preventDefault();
+                closeModals();
+                break;
+        }
+    } else {
+        // Not in preview mode - handle pagination
+        // Don't trigger if user is typing in an input field
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+            return;
+        }
+
+        switch(e.key) {
+            case 'ArrowLeft':
+                e.preventDefault();
+                const prevBtn = document.getElementById('prevPage');
+                if (prevBtn && !prevBtn.disabled) {
+                    prevBtn.click();
+                }
+                break;
+            case 'ArrowRight':
+                e.preventDefault();
+                const nextBtn = document.getElementById('nextPage');
+                if (nextBtn && !nextBtn.disabled) {
+                    nextBtn.click();
+                }
+                break;
+        }
+    }
+}
+
 // WebSocket connection
 function connectWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -359,11 +411,8 @@ function renderTasks(tasks) {
     container.innerHTML = sortedTasks.map(task => {
         const statusText = getTaskStatusText(task);
 
-        // Limit prompt to 10 characters
+        // Use full prompt, no truncation
         const displayPrompt = formatTaskPrompt(task.prompt);
-        const shortPrompt = displayPrompt.length > 10
-            ? displayPrompt.substring(0, 10) + '...'
-            : displayPrompt;
 
         const startedAt = task.started_at || '';
         const finishedAt = task.finished_at || '';
@@ -375,6 +424,11 @@ function renderTasks(tasks) {
         const clickHandler = task.status === 'failed' ? `onclick="showTaskError('${taskId}')"` : '';
         const cursorStyle = task.status === 'failed' ? 'cursor: pointer;' : '';
 
+        // Show full prompt in title for all tasks
+        const titleText = task.status === 'failed'
+            ? `${displayPrompt} (点击查看错误详情)`
+            : displayPrompt;
+
         return `
             <div class="task-item ${task.status}"
                  data-status="${task.status}"
@@ -385,8 +439,8 @@ function renderTasks(tasks) {
                  data-error="${errorMsg}"
                  ${clickHandler}
                  style="${cursorStyle}"
-                 title="${task.status === 'failed' ? '点击查看错误详情' : ''}">
-                <span class="task-prompt">${shortPrompt}</span>
+                 title="${titleText}">
+                <span class="task-prompt">${displayPrompt}</span>
                 <span class="task-status">${statusText}</span>
             </div>
         `;
@@ -455,12 +509,13 @@ function renderImages(data) {
     grid.innerHTML = data.items.map(img => `
         <div class="image-item" onclick="previewImage('${img.url}')">
             <img src="${img.url}" alt="Generated image">
+            <button class="delete-btn" onclick="event.stopPropagation(); deleteImage(${img.id})" title="删除">×</button>
             <div class="image-actions">
                 <button class="action-btn" onclick="event.stopPropagation(); showPrompt(${img.id})" title="查看提示词">
                     ℹ️
                 </button>
-                <button class="action-btn" onclick="event.stopPropagation(); deleteImage(${img.id})" title="删除">
-                    🗑️
+                <button class="action-btn" onclick="event.stopPropagation(); useImageAsAttachment('${img.url}')" title="作为附件">
+                    📎
                 </button>
             </div>
         </div>
@@ -608,6 +663,8 @@ function removeImage() {
 
 function updateCountInputState() {
     const countInput = document.getElementById('count');
+    const ratioSection = document.querySelector('.ratio-section');
+    const countSection = document.querySelector('.count-section');
     const hasImage = uploadedImageData !== null;
 
     if (hasImage) {
@@ -615,10 +672,18 @@ function updateCountInputState() {
         previousCount = parseInt(countInput.value) || 1;
         countInput.value = 1;
         countInput.disabled = true;
+
+        // Hide ratio and count sections
+        if (ratioSection) ratioSection.style.display = 'none';
+        if (countSection) countSection.style.display = 'none';
     } else {
         // Restore previous count
         countInput.value = previousCount;
         countInput.disabled = false;
+
+        // Show ratio and count sections
+        if (ratioSection) ratioSection.style.display = 'block';
+        if (countSection) countSection.style.display = 'block';
     }
 }
 
@@ -640,4 +705,32 @@ function showTaskError(taskId) {
     // Display error in modal
     document.getElementById('taskErrorText').textContent = errorMsg;
     document.getElementById('taskErrorModal').style.display = 'block';
+}
+
+// Use image as attachment
+async function useImageAsAttachment(imageUrl) {
+    try {
+        // Fetch image from URL
+        const response = await fetch(imageUrl);
+        if (!response.ok) {
+            throw new Error('图片加载失败');
+        }
+
+        const blob = await response.blob();
+
+        // Convert blob to data URL
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            uploadedImageData = e.target.result;
+            showImageThumbnail(uploadedImageData);
+            updateCountInputState();
+            showNotice('已将图片设为附件');
+        };
+        reader.onerror = function() {
+            showNotice('图片读取失败');
+        };
+        reader.readAsDataURL(blob);
+    } catch (error) {
+        showNotice(`设置附件失败: ${error.message}`);
+    }
 }
