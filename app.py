@@ -17,7 +17,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler('app.log')
+        logging.FileHandler('app.log', encoding='utf-8')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -204,9 +204,9 @@ async def create_task(task_data: TaskCreate):
 
 
 @app.get("/api/tasks")
-async def get_tasks():
+async def get_tasks(limit: int = 20):
     """Get all tasks"""
-    return task_queue.list_tasks()
+    return task_queue.list_tasks(limit)
 
 
 @app.websocket("/ws/tasks")

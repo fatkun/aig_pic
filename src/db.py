@@ -360,20 +360,12 @@ def get_task_by_id(task_id: str) -> Optional[Dict]:
 
 
 def list_tasks(limit: int = 10) -> List[Dict]:
-    """List recent tasks, ordered by status (running first) then created_at"""
+    """List recent tasks, ordered by id DESC (newest first)"""
     with get_db() as conn:
         cursor = conn.execute(
             """
             SELECT * FROM tasks
-            ORDER BY
-                CASE status
-                    WHEN 'running' THEN 1
-                    WHEN 'queued' THEN 2
-                    WHEN 'succeeded' THEN 3
-                    WHEN 'failed' THEN 4
-                    ELSE 5
-                END,
-                created_at DESC
+            ORDER BY id DESC
             LIMIT ?
             """,
             (limit,)

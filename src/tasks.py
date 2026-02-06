@@ -253,7 +253,7 @@ class TaskQueue:
         # Fallback to database
         return get_task_by_id(task_id)
 
-    def list_tasks(self, limit: int = 10) -> List[Dict]:
+    def list_tasks(self, limit: int = 20) -> List[Dict]:
         """List recent tasks from database"""
         return db_list_tasks(limit)
 

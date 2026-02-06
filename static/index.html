@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 文生图</title>
-    <link rel="stylesheet" href="/static/styles.css?t=202602061500">
+    <link rel="stylesheet" href="/static/styles.css?t=202602061515">
 </head>
 <body>
     <div id="noticeContainer" class="notice-container"></div>
@@ -121,15 +121,22 @@
         </div>
     </div>
 
-    <!-- Task Error Modal -->
-    <div id="taskErrorModal" class="modal">
+    <!-- Task Detail Modal -->
+    <div id="taskDetailModal" class="modal">
         <div class="modal-content">
             <span class="close">&times;</span>
-            <h3>任务失败原因</h3>
-            <p id="taskErrorText" style="color: #ef4444; word-break: break-word;"></p>
+            <h3>任务详情</h3>
+            <div id="taskDetailContent" style="word-break: break-word;">
+                <p><strong>提示词：</strong><span id="taskDetailPrompt"></span></p>
+                <p><strong>状态：</strong><span id="taskDetailStatus"></span></p>
+                <div id="taskDetailErrorSection" style="display: none; margin-top: 15px;">
+                    <p><strong>错误信息：</strong></p>
+                    <p id="taskDetailError" style="color: #ef4444; margin-top: 5px;"></p>
+                </div>
+            </div>
         </div>
     </div>
 
-    <script src="/static/app.js?t=202602061505"></script>
+    <script src="/static/app.js?t=202602061550"></script>
 </body>
 </html>

@@ -378,7 +378,7 @@ input::placeholder {
 .task-item {
     padding: 8px 10px;
     margin-bottom: 8px;
-    background: #192743;
+    background: #161f32;
     border-radius: 6px;
     border-left: 3px solid #3b82f6;
     display: flex;
@@ -402,6 +402,25 @@ input::placeholder {
 
 .task-item.running {
     border-left-color: #ffc107;
+    background: linear-gradient(
+        90deg,
+        #161f32 0%,
+        #161f32 25%,
+        rgba(34, 197, 94, 0.15) 50%,
+        #161f32 75%,
+        #161f32 100%
+    );
+    background-size: 200% 100%;
+    animation: wave-flow 2s linear infinite;
+}
+
+@keyframes wave-flow {
+    0% {
+        background-position: 200% 0%;
+    }
+    100% {
+        background-position: 0% 0%;
+    }
 }
 
 .task-item.succeeded {
@@ -415,6 +434,23 @@ input::placeholder {
 .task-item.failed:hover {
     background: #1f2937;
     cursor: pointer;
+}
+
+.toggle-tasks-btn {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    color: #94a3b8;
+    padding: 6px 16px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.toggle-tasks-btn:hover {
+    background: #334155;
+    color: #e2e8f0;
+    border-color: #475569;
 }
 
 .images-grid {

@@ -3,6 +3,8 @@ import base64
 import os
 import logging
 import re
+import traceback
+import asyncio
 from datetime import datetime
 from typing import List, Dict, Optional
 import uuid
@@ -90,7 +92,7 @@ async def generate_images(settings: Dict, prompt: str, n: int, image_data: Optio
                     filenames = await _save_url_images(image_urls, prompt, client)
                     logger.info(f"Successfully saved {len(filenames)} images (img2img)")
                 else:
-                    raise ValueError("No valid image URL in response")
+                    raise ValueError("No valid image URL in response, content=" + content)
 
             # Handle standard text-to-image response
             elif "data" in data and len(data["data"]) > 0:
@@ -105,10 +107,30 @@ async def generate_images(settings: Dict, prompt: str, n: int, image_data: Optio
             else:
                 raise ValueError("No image data in response")
 
-        except (httpx.HTTPStatusError, KeyError) as e:
+        except httpx.HTTPStatusError as e:
+            # Extract error details from response body
+            error_msg = f"HTTP {e.response.status_code}"
+            try:
+                error_body = e.response.text
+                if error_body:
+                    # Try to parse as JSON for better formatting
+                    if "error" not in error_body:
+                        error_msg += f" - Response body: {error_body}"
+                    else:
+                        try:
+                            error_json = e.response.json()
+                            if "error" in error_json:
+                                error_msg += f" - Error: {error_json['error']}"
+                        except:
+                            error_msg += f" - Response body: {error_body}"
+            except:
+                pass
+
+            logger.error(f"API request failed: {error_msg}", exc_info=True)
+
             # Only try fallback for text-to-image (not img2img)
             if not image_data:
-                logger.warning(f"b64_json format failed, trying url format: {e}")
+                logger.warning(f"b64_json format failed, trying url format")
                 # Fallback to url format
                 payload["response_format"] = "url"
 
@@ -125,15 +147,29 @@ async def generate_images(settings: Dict, prompt: str, n: int, image_data: Optio
                             raise ValueError("No valid image data in response")
                     else:
                         raise ValueError("Empty response data")
+                except httpx.HTTPStatusError as fallback_http_error:
+                    # Extract error details from fallback response
+                    fallback_error_msg = f"HTTP {fallback_http_error.response.status_code}"
+                    try:
+                        fallback_error_body = fallback_http_error.response.text
+                        if fallback_error_body:
+                            fallback_error_msg += f" - Response body: {fallback_error_body}"
+                    except:
+                        pass
+                    logger.error(f"Both b64_json and url formats failed: {fallback_error_msg}", exc_info=True)
+                    raise ValueError(f"Image generation failed: {fallback_error_msg}") from fallback_http_error
                 except Exception as fallback_error:
-                    logger.error(f"Both b64_json and url formats failed: {fallback_error}")
+                    logger.error(f"Both b64_json and url formats failed: {fallback_error}", exc_info=True)
                     raise
             else:
-                logger.error(f"Image generation failed (img2img): {e}")
-                raise
+                raise ValueError(f"Image generation failed (img2img): {error_msg}") from e
+
+        except KeyError as e:
+            logger.error(f"Response parsing failed: {e}", exc_info=True)
+            raise ValueError(f"Invalid response format: {e}") from e
 
         except Exception as e:
-            logger.error(f"Image generation failed: {e}")
+            logger.error(f"Image generation failed: {e}", exc_info=True)
             raise
 
     return filenames
@@ -168,27 +204,24 @@ async def _save_b64_images(data: List[Dict], prompt: str) -> List[str]:
             logger.debug(f"Saved image: {filename}")
 
         except Exception as e:
-            logger.error(f"Failed to save image {idx}: {e}")
+            logger.error(f"Failed to save image {idx}: {e}", exc_info=True)
             raise
 
     return filenames
 
 
-async def _save_url_images(data: List[Dict], prompt: str, client: httpx.AsyncClient) -> List[str]:
-    """Download and save images from URLs"""
-    os.makedirs("output", exist_ok=True)
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    short_id = str(uuid.uuid4())[:8]
-
-    filenames = []
-
-    for idx, item in enumerate(data, 1):
+async def _download_single_image(
+    client: httpx.AsyncClient,
+    image_url: str,
+    idx: int,
+    timestamp: str,
+    short_id: str,
+    max_retries: int = 3
+) -> str:
+    """Download a single image with retry logic"""
+    for attempt in range(1, max_retries + 1):
         try:
-            image_url = item["url"]
-
-            # Download image
-            logger.debug(f"Downloading image from: {image_url}")
+            logger.debug(f"Downloading image {idx} from: {image_url} (attempt {attempt}/{max_retries})")
             response = await client.get(image_url)
             response.raise_for_status()
             image_bytes = response.content
@@ -213,11 +246,37 @@ async def _save_url_images(data: List[Dict], prompt: str, client: httpx.AsyncCli
             with open(filepath, "wb") as f:
                 f.write(image_bytes)
 
-            filenames.append(filename)
             logger.debug(f"Saved image: {filename}")
+            return filename
 
         except Exception as e:
-            logger.error(f"Failed to download/save image {idx}: {e}")
-            raise
+            if attempt < max_retries:
+                logger.warning(f"Failed to download image {idx} (attempt {attempt}/{max_retries}): {e}, retrying in 1 second...")
+                await asyncio.sleep(1)
+            else:
+                logger.error(f"Failed to download/save image {idx} after {max_retries} attempts: {e}", exc_info=True)
+                raise
 
-    return filenames
+
+async def _save_url_images(data: List[Dict], prompt: str, client: httpx.AsyncClient, max_concurrent: int = 2) -> List[str]:
+    """Download and save images from URLs with concurrent downloads and retry logic"""
+    os.makedirs("output", exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    short_id = str(uuid.uuid4())[:8]
+
+    # Create semaphore to limit concurrent downloads
+    semaphore = asyncio.Semaphore(max_concurrent)
+
+    async def download_with_semaphore(item: Dict, idx: int) -> str:
+        async with semaphore:
+            image_url = item["url"]
+            return await _download_single_image(client, image_url, idx, timestamp, short_id)
+
+    # Create download tasks for all images
+    tasks = [download_with_semaphore(item, idx) for idx, item in enumerate(data, 1)]
+
+    # Execute all downloads concurrently (limited by semaphore)
+    filenames = await asyncio.gather(*tasks)
+
+    return list(filenames)

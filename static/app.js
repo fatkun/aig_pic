@@ -15,6 +15,9 @@ const NOTICE_DURATION = 3000;
 let uploadedImageData = null;
 let previousCount = 1;
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB
+let isTasksExpanded = false; // Task list expand state
+let tasksDataMap = new Map(); // Store task data in memory
+let allTasks = []; // Store all loaded tasks
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
@@ -178,14 +181,20 @@ function ensureTaskTimer() {
 function updateTaskTimers() {
     const items = document.querySelectorAll('.task-item');
     items.forEach(item => {
-        const status = item.dataset.status;
+        const taskId = item.dataset.taskId;
+        const taskData = tasksDataMap.get(taskId);
+        if (!taskData) {
+            return;
+        }
+
+        const status = taskData.status;
         const statusEl = item.querySelector('.task-status');
         if (!statusEl) {
             return;
         }
 
-        const startedAt = item.dataset.startedAt || item.dataset.createdAt;
-        const finishedAt = item.dataset.finishedAt;
+        const startedAt = taskData.started_at || taskData.created_at;
+        const finishedAt = taskData.finished_at;
         const duration = getDurationSeconds(startedAt, status === 'running' ? null : finishedAt);
         const durationText = duration !== null ? `${duration}秒` : '';
 
@@ -302,9 +311,9 @@ function connectWebSocket() {
 }
 
 async function updateTask(task) {
-    // Fetch latest tasks from server
+    // Fetch latest tasks from server (always fetch 15 tasks)
     try {
-        const response = await fetch('/api/tasks');
+        const response = await fetch('/api/tasks?limit=15');
         if (response.ok) {
             const tasks = await response.json();
             renderTasks(tasks);
@@ -397,6 +406,12 @@ async function generateImages() {
 }
 
 // Task management
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
 function renderTasks(tasks) {
     const container = document.getElementById('tasksList');
 
@@ -405,49 +420,96 @@ function renderTasks(tasks) {
         return;
     }
 
-    // Keep only last 10 tasks, with running tasks first
-    const sortedTasks = tasks.slice(0, 10);
+    // Store all tasks
+    allTasks = tasks;
 
-    container.innerHTML = sortedTasks.map(task => {
+    // Clear previous task data
+    tasksDataMap.clear();
+
+    // Sort tasks: running tasks first, then by creation time (newest first)
+    const sortedTasks = [...tasks].sort((a, b) => {
+        // Running tasks always come first
+        if (a.status === 'running' && b.status !== 'running') return -1;
+        if (a.status !== 'running' && b.status === 'running') return 1;
+
+        // Within same status group, sort by creation time (newest first)
+        const timeA = new Date(a.created_at || 0).getTime();
+        const timeB = new Date(b.created_at || 0).getTime();
+        return timeB - timeA;
+    });
+
+    // Determine how many tasks to show
+    const maxTasks = isTasksExpanded ? 15 : 3;
+    const displayTasks = sortedTasks.slice(0, maxTasks);
+    const hasMore = sortedTasks.length > 3;
+
+    const tasksHtml = displayTasks.map(task => {
         const statusText = getTaskStatusText(task);
 
         // Use full prompt, no truncation
         const displayPrompt = formatTaskPrompt(task.prompt);
 
-        const startedAt = task.started_at || '';
-        const finishedAt = task.finished_at || '';
-        const createdAt = task.created_at || '';
         const taskId = task.task_id || '';
-        const errorMsg = task.error || '';
 
-        // Add click handler for failed tasks
-        const clickHandler = task.status === 'failed' ? `onclick="showTaskError('${taskId}')"` : '';
-        const cursorStyle = task.status === 'failed' ? 'cursor: pointer;' : '';
+        // Store task data in memory (store all tasks, not just displayed ones)
+        tasksDataMap.set(taskId, {
+            status: task.status,
+            started_at: task.started_at || '',
+            finished_at: task.finished_at || '',
+            created_at: task.created_at || '',
+            error: task.error || '',
+            prompt: task.prompt
+        });
 
-        // Show full prompt in title for all tasks
-        const titleText = task.status === 'failed'
-            ? `${displayPrompt} (点击查看错误详情)`
-            : displayPrompt;
+        // All tasks are clickable
+        const clickHandler = `onclick="showTaskDetail('${escapeHtml(taskId)}')"`;
 
         return `
             <div class="task-item ${task.status}"
-                 data-status="${task.status}"
-                 data-started-at="${startedAt}"
-                 data-finished-at="${finishedAt}"
-                 data-created-at="${createdAt}"
-                 data-task-id="${taskId}"
-                 data-error="${errorMsg}"
+                 data-task-id="${escapeHtml(taskId)}"
                  ${clickHandler}
-                 style="${cursorStyle}"
-                 title="${titleText}">
+                 style="cursor: pointer;"
+                 title="${escapeHtml(displayPrompt)}">
                 <span class="task-prompt">${displayPrompt}</span>
                 <span class="task-status">${statusText}</span>
             </div>
         `;
     }).join('');
 
+    // Store all tasks data in memory
+    sortedTasks.forEach(task => {
+        const taskId = task.task_id || '';
+        if (!tasksDataMap.has(taskId)) {
+            tasksDataMap.set(taskId, {
+                status: task.status,
+                started_at: task.started_at || '',
+                finished_at: task.finished_at || '',
+                created_at: task.created_at || '',
+                error: task.error || '',
+                prompt: task.prompt
+            });
+        }
+    });
+
+    // Add expand/collapse button if there are more than 3 tasks
+    const toggleButton = hasMore ? `
+        <div style="text-align: center; margin-top: 10px;">
+            <button id="toggleTasksBtn" class="toggle-tasks-btn" onclick="toggleTasksExpand()">
+                ${isTasksExpanded ? '收起' : '展开更多'}
+            </button>
+        </div>
+    ` : '';
+
+    container.innerHTML = tasksHtml + toggleButton;
+
     ensureTaskTimer();
     updateTaskTimers();
+}
+
+function toggleTasksExpand() {
+    isTasksExpanded = !isTasksExpanded;
+    // Re-render with existing tasks data (no backend request)
+    renderTasks(allTasks);
 }
 
 function getTaskStatusText(task) {
@@ -687,24 +749,38 @@ function updateCountInputState() {
     }
 }
 
-// Task error display
-function showTaskError(taskId) {
-    // Find task element
-    const taskElement = document.querySelector(`[data-task-id="${taskId}"]`);
-    if (!taskElement) {
+// Task detail display
+function showTaskDetail(taskId) {
+    // Get task data from memory
+    const taskData = tasksDataMap.get(taskId);
+    if (!taskData) {
         showNotice('任务不存在');
         return;
     }
 
-    const errorMsg = taskElement.dataset.error;
-    if (!errorMsg) {
-        showNotice('无错误信息');
-        return;
+    // Display prompt
+    document.getElementById('taskDetailPrompt').textContent = taskData.prompt;
+
+    // Display status
+    const statusMap = {
+        'running': '生成中',
+        'succeeded': '已完成',
+        'failed': '失败',
+        'queued': '排队中'
+    };
+    document.getElementById('taskDetailStatus').textContent = statusMap[taskData.status] || taskData.status;
+
+    // Display error if failed
+    const errorSection = document.getElementById('taskDetailErrorSection');
+    if (taskData.status === 'failed' && taskData.error) {
+        document.getElementById('taskDetailError').textContent = taskData.error;
+        errorSection.style.display = 'block';
+    } else {
+        errorSection.style.display = 'none';
     }
 
-    // Display error in modal
-    document.getElementById('taskErrorText').textContent = errorMsg;
-    document.getElementById('taskErrorModal').style.display = 'block';
+    // Show modal
+    document.getElementById('taskDetailModal').style.display = 'block';
 }
 
 // Use image as attachment
